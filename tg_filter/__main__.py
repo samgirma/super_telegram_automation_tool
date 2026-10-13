@@ -50,24 +50,31 @@ def main(argv: list[str] | None = None) -> int:
         return 2
 
     failures = 0
-    for path in args.paths:
-        try:
-            result = filter_member_csv(
-                path, output=args.output, in_place=args.in_place
+    try:
+        for path in args.paths:
+            try:
+                result = filter_member_csv(
+                    path, output=args.output, in_place=args.in_place
+                )
+            except (FileNotFoundError, ValueError) as exc:
+                print(f"{path}: error: {exc}", file=sys.stderr)
+                failures += 1
+                continue
+            line = (
+                f"{path.name}: {result['read']} read, {result['kept']} kept, "
+                f"{result['dropped']} dropped -> {result['path']}"
             )
-        except (FileNotFoundError, ValueError) as exc:
-            print(f"{path}: error: {exc}", file=sys.stderr)
-            failures += 1
-            continue
-        line = (
-            f"{path.name}: {result['read']} read, {result['kept']} kept, "
-            f"{result['dropped']} dropped -> {result['path']}"
-        )
-        if "backup" in result:
-            line += f" (backup: {result['backup']})"
-        print(line)
+            if "backup" in result:
+                line += f" (backup: {result['backup']})"
+            print(line)
+    except KeyboardInterrupt:
+        print("\ninterrupted", file=sys.stderr)
+        return 130
 
     return 1 if failures else 0
+
+
+__all__ = ["build_parser", "main"]
 
 
 if __name__ == "__main__":

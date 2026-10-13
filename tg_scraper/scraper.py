@@ -3,17 +3,16 @@
 from __future__ import annotations
 
 import asyncio
-import csv
-import re
 import sys
 import time
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Any, AsyncIterator, Callable
 
 from telethon import TelegramClient
 from telethon.errors import (
-    ChatAdminRequiredError,
     ChannelPrivateError,
+    ChatAdminRequiredError,
     FloodWaitError,
     UsernameInvalidError,
     UsernameNotOccupiedError,
@@ -23,14 +22,12 @@ from telethon.tl.types import channels as channel_types
 
 from tg_common.client import participant_count, resolve
 from tg_common.config import Settings
-from tg_common.storage import MEMBER_FIELDS, MemberRecord, MemberStore
-
-_UNSAFE = re.compile(r"[^a-z0-9_]+")
+from tg_common.storage import MemberRecord, MemberStore, clean_username, slugify
 
 # Telegram returns at most 200 participants per GetParticipants call.
 PAGE_SIZE = 200
 
-# Rows buffered before a write to disk. Small enough that a crash loses little.
+# Rows buffered before an atomic write to disk. Small enough that a crash loses little.
 FLUSH_EVERY = 500
 
 # Members read between progress reports. Independent of FLUSH_EVERY so a
@@ -40,6 +37,8 @@ REPORT_EVERY = PAGE_SIZE
 # Consecutive pages without new rows before we assume Telegram has stopped
 # returning usable results. Guards against endless paging loops.
 MAX_STALL_PAGES = 3
+
+ProgressCallback = Callable[[int, int, int, int, int | None], None]
 
 
 @dataclass
@@ -80,24 +79,20 @@ class ScrapeReport:
         return line
 
 
-def _is_skippable(user: types.User, include_bots: bool) -> bool:
+def _is_skippable(user: Any, include_bots: bool) -> bool:
     if getattr(user, "bot", False):
         return not include_bots
     if getattr(user, "deleted", False):
         return True
-    return not _clean_username(user)
+    return not clean_username(getattr(user, "username", None))
 
 
-def _clean_username(user: types.User) -> str:
-    return (getattr(user, "username", None) or "").lstrip("@")
-
-
-def _slug(text: str) -> str:
-    cleaned = _UNSAFE.sub("_", (text or "source").lstrip("@").lower()).strip("_")
-    return cleaned or "source"
-
-
-async def _iter_channel_users(client: TelegramClient, channel, search: str | None, delay: float):
+async def _iter_channel_users(
+    client: TelegramClient,
+    channel: Any,
+    search: str | None,
+    delay: float,
+) -> AsyncIterator[types.User]:
     """Page a channel or megagroup with GetParticipants.
 
     Telethon's own iter_participants pages internally, so a delay has to be
@@ -107,7 +102,6 @@ async def _iter_channel_users(client: TelegramClient, channel, search: str | Non
     """
     offset = 0
     stalled = 0
-    pages = 0
     while True:
         request = functions.channels.GetParticipantsRequest(
             channel=channel,
@@ -121,9 +115,11 @@ async def _iter_channel_users(client: TelegramClient, channel, search: str | Non
         if isinstance(result, channel_types.ChannelParticipantsNotModified):
             return
 
-        page = getattr(result, "users", []) if isinstance(
-            result, channel_types.ChannelParticipants
-        ) else []
+        page = (
+            getattr(result, "users", [])
+            if isinstance(result, channel_types.ChannelParticipants)
+            else []
+        )
 
         fresh = 0
         for user in page:
@@ -132,7 +128,6 @@ async def _iter_channel_users(client: TelegramClient, channel, search: str | Non
                 yield user
 
         offset += len(page)
-        pages += 1
         if delay > 0:
             await asyncio.sleep(delay)
         if len(page) < PAGE_SIZE:
@@ -145,7 +140,7 @@ async def _iter_channel_users(client: TelegramClient, channel, search: str | Non
             stalled = 0
 
 
-async def _iter_chat_users(client: TelegramClient, chat):
+async def _iter_chat_users(client: TelegramClient, chat: Any) -> AsyncIterator[types.User]:
     """Yield users of a legacy basic group.
 
     Basic groups have no paged GetParticipants request, so the full chat is
@@ -157,26 +152,18 @@ async def _iter_chat_users(client: TelegramClient, chat):
             yield user
 
 
-async def _iter_users(client: TelegramClient, entity, search: str | None, delay: float):
+async def _iter_users(
+    client: TelegramClient,
+    entity: Any,
+    search: str | None,
+    delay: float,
+) -> AsyncIterator[types.User]:
     if isinstance(entity, types.Channel):
         async for user in _iter_channel_users(client, entity, search, delay):
             yield user
     else:
         async for user in _iter_chat_users(client, entity):
             yield user
-
-
-def _write_rows(path: Path, rows: list[dict]) -> None:
-    """Append a batch, adding a header only when the file is new."""
-    if not rows:
-        return
-    path.parent.mkdir(parents=True, exist_ok=True)
-    exists = path.exists() and path.stat().st_size > 0
-    with path.open("a", newline="", encoding="utf-8") as handle:
-        writer = csv.DictWriter(handle, fieldnames=MEMBER_FIELDS)
-        if not exists:
-            writer.writeheader()
-        writer.writerows(rows)
 
 
 async def scrape(
@@ -186,7 +173,7 @@ async def scrape(
     output: Path | None = None,
     include_bots: bool = False,
     limit: int | None = None,
-    on_progress=None,
+    on_progress: ProgressCallback | None = None,
 ) -> ScrapeReport:
     try:
         entity = await resolve(client, source)
@@ -197,13 +184,13 @@ async def scrape(
             f"{source!r} is private. Your account must already be a member to read it."
         ) from exc
 
-    source_title = getattr(entity, "title", None) or _slug(source)
+    source_title = getattr(entity, "title", None) or slugify(source)
     source_id = entity.id
     expected = await participant_count(client, entity)
 
-    target = Path(output) if output else settings.data_dir / f"{_slug(source_title)}.csv"
-    known = MemberStore(target).load()
-    known_ids = set(known.records)
+    target = Path(output) if output else settings.data_dir / f"{slugify(source_title)}.csv"
+    store = MemberStore(target).load()
+    initial_count = len(store)
 
     # Channels need a non-empty search filter to page past the first chunk.
     search = "" if isinstance(entity, types.Channel) else None
@@ -213,7 +200,7 @@ async def scrape(
     new = 0
     duplicates = 0
     skipped = 0
-    pending: list[dict] = []
+    unflushed = 0
     last_report = 0
     started = time.monotonic()
 
@@ -234,18 +221,17 @@ async def scrape(
             seen += 1
             if _is_skippable(user, include_bots):
                 skipped += 1
-            elif user.id in known_ids:
+            elif user.id in store:
                 duplicates += 1
             else:
-                known_ids.add(user.id)
-                pending.append(
-                    MemberRecord.from_user(user, source_title, source_id).to_row()
-                )
-                new += 1
+                record = MemberRecord.from_user(user, source_title, source_id)
+                if store.add(record):
+                    new += 1
+                    unflushed += 1
 
-            if len(pending) >= FLUSH_EVERY:
-                _write_rows(target, pending)
-                pending = []
+            if unflushed >= FLUSH_EVERY:
+                store.flush()
+                unflushed = 0
 
             # Report on read count, not on new rows, so a group full of
             # already-known or unaddressable members still shows movement.
@@ -256,18 +242,20 @@ async def scrape(
             if limit is not None and seen >= limit:
                 break
     except ChatAdminRequiredError as exc:
-        _write_rows(target, pending)
         raise ValueError(
             f"need admin rights in {source_title!r} to list its members"
         ) from exc
     except FloodWaitError as exc:
-        _write_rows(target, pending)
         raise RuntimeError(
             f"Telegram asked for a {exc.seconds}s flood wait partway through "
             f"{source_title!r}. Progress so far was saved to {target}; rerun to resume."
         ) from exc
+    finally:
+        # Guarantee that all pending members are atomically written to disk on
+        # completion, error, or user interruption (Ctrl-C).
+        if unflushed > 0 or (initial_count == 0 and len(store) > 0 and not target.exists()):
+            store.flush()
 
-    _write_rows(target, pending)
     seconds = time.monotonic() - started
     if seen and seen != last_report:
         report()
@@ -284,3 +272,6 @@ async def scrape(
         seconds=seconds,
         stopped_early=bool(expected and seen < expected * 0.5 and seen > 0),
     )
+
+
+__all__ = ["ScrapeReport", "scrape"]

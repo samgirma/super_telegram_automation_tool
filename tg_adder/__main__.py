@@ -104,5 +104,8 @@ def main(argv: list[str] | None = None) -> int:
         return 130
 
 
+__all__ = ["build_parser", "main"]
+
+
 if __name__ == "__main__":
     raise SystemExit(main())

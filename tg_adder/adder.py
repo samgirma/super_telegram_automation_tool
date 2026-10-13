@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Any, Callable
 
 from telethon import TelegramClient
 from telethon.errors import (
@@ -20,8 +21,12 @@ from telethon.errors import (
     UserAlreadyParticipantError,
     UserBannedInChannelError,
     UserChannelsTooMuchError,
+    UserDeactivatedBanError,
+    UserIdInvalidError,
     UserIsBlockedError,
     UserIsBotError,
+    UserKickedError,
+    UserNotMutualContactError,
     UserNotParticipantError,
     UserPrivacyRestrictedError,
     UsernameInvalidError,
@@ -31,10 +36,13 @@ from telethon.tl import functions, types
 
 from tg_common.client import resolve
 from tg_common.config import Settings
-from tg_common.storage import AddLog, MemberRecord, MemberStore
+from tg_common.storage import AddLog, MemberRecord, MemberStore, clean_username
 
 # Ineligible rows are normal outcomes, not run failures.
 SKIPPED_STATUSES = {"deleted", "kicked", "restricted", "bot"}
+
+AttemptCallback = Callable[[int, MemberRecord, str, str], None]
+NotifyCallback = Callable[[str], None]
 
 
 @dataclass
@@ -44,6 +52,7 @@ class AddReport:
     counts: dict[str, int]
     path: Path
     dry_run: bool
+    stopped_reason: str | None = None
 
     def summary(self) -> str:
         head = "would invite" if self.dry_run else "invite attempts"
@@ -52,6 +61,8 @@ class AddReport:
         line += " -> " + (tally if tally else "nothing to do")
         if self.dry_run:
             line += " (dry run, no log written)"
+        if self.stopped_reason:
+            line += f" [{self.stopped_reason}]"
         return line
 
 
@@ -60,13 +71,17 @@ def _classify(exc: Exception) -> tuple[str, str]:
     table: list[tuple[type, str, str]] = [
         (UserAlreadyParticipantError, "already_member", "already in target"),
         (UserPrivacyRestrictedError, "privacy_restricted", "privacy settings block invites"),
+        (UserNotMutualContactError, "privacy_restricted", "privacy allows mutual contacts only"),
         (UserBannedInChannelError, "banned", "banned from target"),
+        (UserKickedError, "banned", "user was kicked from target"),
         (UserIsBlockedError, "blocked", "user blocked the account"),
         (UserNotParticipantError, "sent", "invite sent"),
         (InviteRequestSentError, "request_sent", "join request already pending"),
         (UserIsBotError, "is_bot", "user is a bot"),
         (InputUserDeactivatedError, "deactivated", "account is deleted"),
+        (UserDeactivatedBanError, "deactivated", "account is deactivated or banned"),
         (PeerIdInvalidError, "unreachable", "user has no reachable username or id"),
+        (UserIdInvalidError, "unreachable", "invalid user ID"),
         (UserChannelsTooMuchError, "too_many_channels", "user is in too many channels"),
         (ChannelsTooMuchError, "too_many_channels", "account is in too many channels"),
         (PeerFloodError, "peer_flood", "Telegram flagged the invite rate for this account"),
@@ -81,7 +96,7 @@ def _eligible(record: MemberRecord, include_bots: bool) -> str:
     # InviteToChannelRequest resolves a username server-side. A bare user id
     # carries no access hash, so Telegram rejects it for anyone we have never
     # spoken to, which rules out most scraped members.
-    if not record.username:
+    if not clean_username(record.username):
         return "no_username"
     if record.is_bot and not include_bots:
         return "is_bot"
@@ -90,12 +105,13 @@ def _eligible(record: MemberRecord, include_bots: bool) -> str:
     return ""
 
 
-async def _invite(client: TelegramClient, channel, record: MemberRecord) -> tuple[str, str]:
+async def _invite(client: TelegramClient, channel: Any, record: MemberRecord) -> tuple[str, str]:
     try:
         # users must be a list. Passing a bare string makes Telethon iterate it
         # character by character, which resolves to single letters and fails.
+        clean_user = clean_username(record.username)
         await client(
-            functions.channels.InviteToChannelRequest(channel, [record.username])
+            functions.channels.InviteToChannelRequest(channel, [clean_user])
         )
     except FloodWaitError:
         raise
@@ -114,7 +130,8 @@ async def add_members(
     include_bots: bool = False,
     dry_run: bool = False,
     log_path: Path | None = None,
-    on_attempt=None,
+    on_attempt: AttemptCallback | None = None,
+    notify: NotifyCallback | None = None,
 ) -> AddReport:
     pause = settings.add_delay if delay is None else delay
     source = Path(csv_path)
@@ -188,25 +205,39 @@ async def add_members(
             except FloodWaitError as exc:
                 log.record(record.user_id, record.username, "flood_wait", str(exc.seconds))
                 bump("flood_wait")
-                print(
-                    f"Flood wait of {exc.seconds}s after {attempted} attempts. "
+                if not dry_run:
+                    log.write()
+                reason = f"Flood wait of {exc.seconds}s after {attempted} attempts"
+                msg = (
+                    f"{reason}. "
                     f"Progress is saved to {log_file}. Rerun to resume."
                 )
-                return AddReport(title, attempted, counts, log_file, dry_run)
+                if notify is not None:
+                    notify(msg)
+                else:
+                    print(msg)
+                return AddReport(title, attempted, counts, log_file, dry_run, stopped_reason=reason)
 
             log.record(record.user_id, record.username, result, detail)
             bump(result)
+            if not dry_run:
+                log.write()
+
             if on_attempt is not None:
                 on_attempt(attempted, record, result, detail)
             if result == "peer_flood":
                 # Account-level signal, not a per-user outcome. Pushing on after
                 # this is what escalates a flood warning into a length ban.
-                print(
-                    "Telegram returned PEER_FLOOD: the invite rate is too high "
-                    f"for this account. Stopping after {attempted} attempts. "
+                reason = "Telegram returned PEER_FLOOD: the invite rate is too high for this account"
+                msg = (
+                    f"{reason}. Stopping after {attempted} attempts. "
                     "Wait several hours before resuming, and use a larger --delay."
                 )
-                return AddReport(title, attempted, counts, log_file, dry_run)
+                if notify is not None:
+                    notify(msg)
+                else:
+                    print(msg)
+                return AddReport(title, attempted, counts, log_file, dry_run, stopped_reason=reason)
             if pause > 0:
                 await asyncio.sleep(pause)
     except ChatAdminRequiredError as exc:
@@ -218,3 +249,6 @@ async def add_members(
             log.write()
 
     return AddReport(title, attempted, counts, log_file, dry_run)
+
+
+__all__ = ["AddReport", "add_members"]

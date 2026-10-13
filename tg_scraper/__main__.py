@@ -83,8 +83,11 @@ def main(argv: list[str] | None = None) -> int:
         print(f"error: {exc}", file=sys.stderr)
         return 2
     except KeyboardInterrupt:
-        print("\ninterrupted", file=sys.stderr)
+        print("\ninterrupted. Progress so far was saved to disk.", file=sys.stderr)
         return 130
+
+
+__all__ = ["build_parser", "main"]
 
 
 if __name__ == "__main__":
