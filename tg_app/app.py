@@ -9,11 +9,11 @@ from typing import Any
 
 from telethon import TelegramClient
 
+from tg_adder.adder import AddReport, add_members
 from tg_app import datafiles, groups, ui
 from tg_common.client import connect
 from tg_common.config import ConfigError, Settings, load_settings
 from tg_common.storage import filter_member_csv
-from tg_adder.adder import AddReport, add_members
 from tg_scraper.scraper import ScrapeReport, scrape
 
 SESSION = "app"
@@ -182,7 +182,7 @@ class App:
                 "Only members with a username are saved."
             )
         )
-        last = {"line": None}
+        last: dict[str, int | None] = {"line": None}
 
         def on_progress(seen: int, new: int, dup: int, skipped: int, expected: int | None) -> None:
             last["line"] = seen

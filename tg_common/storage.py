@@ -6,11 +6,12 @@ import csv
 import os
 import re
 import tempfile
+from collections.abc import Iterable, Iterator
 from contextlib import contextmanager
 from dataclasses import asdict, dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import IO, Any, Iterable, Iterator
+from typing import IO, Any
 
 MEMBER_FIELDS = [
     "user_id",
@@ -153,7 +154,7 @@ class MemberRecord:
     collected_at: str = field(default_factory=_now)
 
     @classmethod
-    def from_user(cls, user: Any, source: str, source_id: int) -> "MemberRecord":
+    def from_user(cls, user: Any, source: str, source_id: int) -> MemberRecord:
         if getattr(user, "bot", False):
             status = "bot"
         elif getattr(user, "deleted", False):
@@ -197,7 +198,7 @@ class MemberStore:
         self.added = 0
         self.duplicates = 0
 
-    def load(self) -> "MemberStore":
+    def load(self) -> MemberStore:
         if not self.path.exists():
             return self
         with self.path.open(newline="", encoding="utf-8") as handle:
@@ -312,7 +313,7 @@ class AddLog:
         self.rows: list[dict[str, Any]] = []
         self._all_rows: list[dict[str, Any]] = []
 
-    def load(self) -> "AddLog":
+    def load(self) -> AddLog:
         if not self.path.exists():
             return self
         with self.path.open(newline="", encoding="utf-8") as handle:

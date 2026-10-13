@@ -40,6 +40,14 @@ dependencies = [
     "cryptography>=42.0.0",
 ]
 
+[project.optional-dependencies]
+dev = [
+    "build>=1.0.0",
+    "mypy>=1.10.0",
+    "pytest>=8.0.0",
+    "ruff>=0.8.0",
+]
+
 [project.urls]
 Homepage = "https://github.com/samgirma/super_telegram_automation_tool"
 Repository = "https://github.com/samgirma/super_telegram_automation_tool"
@@ -47,6 +55,40 @@ Issues = "https://github.com/samgirma/super_telegram_automation_tool/issues"
 
 [project.scripts]
 sta = "tg_app.__main__:main"
+tg-scraper = "tg_scraper.__main__:main"
+tg-adder = "tg_adder.__main__:main"
+tg-filter = "tg_filter.__main__:main"
 
 [tool.setuptools]
 packages = ["tg_app", "tg_scraper", "tg_adder", "tg_common", "tg_filter"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+python_files = ["test_*.py"]
+addopts = "-ra --strict-markers"
+
+[tool.ruff]
+target-version = "py310"
+line-length = 100
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "UP", "B"]
+ignore = ["B008", "E501"]
+
+[tool.mypy]
+python_version = "3.10"
+warn_unused_configs = true
+warn_redundant_casts = true
+warn_unused_ignores = true
+check_untyped_defs = true
+disallow_incomplete_defs = true
+disallow_untyped_defs = false
+no_implicit_optional = true
+
+[[tool.mypy.overrides]]
+module = "telethon.*"
+ignore_missing_imports = true
+
+[[tool.mypy.overrides]]
+module = "dotenv.*"
+ignore_missing_imports = true

@@ -3,9 +3,10 @@
 from __future__ import annotations
 
 import sys
+from collections.abc import Callable
 from getpass import getpass
 from pathlib import Path
-from typing import Any, Callable
+from typing import Any
 
 from telethon import TelegramClient
 from telethon.errors import (

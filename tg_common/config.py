@@ -3,14 +3,15 @@
 from __future__ import annotations
 
 import os
+from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Callable, TypeVar
+from typing import TypeVar
 
 try:
     from dotenv import load_dotenv
 except ModuleNotFoundError:
-    load_dotenv = None
+    load_dotenv = None  # type: ignore[assignment]
 
 ROOT = Path(__file__).resolve().parent.parent
 

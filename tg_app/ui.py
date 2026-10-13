@@ -46,8 +46,10 @@ def _enable_windows_ansi() -> None:
     try:
         import ctypes
 
-        kernel32 = ctypes.windll.kernel32
-        kernel32.SetConsoleMode(kernel32.GetStdHandle(-11), 7)
+        windll = getattr(ctypes, "windll", None)
+        if windll is not None:
+            kernel32 = windll.kernel32
+            kernel32.SetConsoleMode(kernel32.GetStdHandle(-11), 7)
     except Exception:
         pass
 
