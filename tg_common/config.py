@@ -5,6 +5,7 @@ from __future__ import annotations
 import os
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Callable, TypeVar
 
 try:
     from dotenv import load_dotenv
@@ -12,6 +13,8 @@ except ModuleNotFoundError:
     load_dotenv = None
 
 ROOT = Path(__file__).resolve().parent.parent
+
+T = TypeVar("T", int, float)
 
 
 @dataclass(frozen=True)
@@ -40,12 +43,15 @@ def _raw(name: str) -> str | None:
     return value or None
 
 
-def _number(name: str, default: float, cast: type) -> float | int:
+def _number(name: str, default: T, cast: Callable[[str], T]) -> T:
     value = _raw(name)
     if value is None:
-        return cast(default)
+        return default
     try:
-        return cast(value)
+        val = cast(value)
+        if val < 0:
+            raise ConfigError(f"{name} must be non-negative, got {value!r}")
+        return val
     except ValueError as exc:
         raise ConfigError(f"{name} must be a number, got {value!r}") from exc
 
@@ -74,10 +80,16 @@ def load_settings(data_dir: Path | None = None) -> Settings:
             "Get api_id and api_hash from https://my.telegram.org -> API development tools."
         )
 
+    assert api_id_raw is not None
+    assert api_hash is not None
+    assert phone is not None
+
     try:
         api_id = int(api_id_raw)
+        if api_id <= 0:
+            raise ValueError("api_id must be positive")
     except ValueError as exc:
-        raise ConfigError(f"TG_API_ID must be an integer, got {api_id_raw!r}") from exc
+        raise ConfigError(f"TG_API_ID must be a positive integer, got {api_id_raw!r}") from exc
 
     target_dir = Path(data_dir) if data_dir else ROOT / "data"
     target_dir.mkdir(parents=True, exist_ok=True)
@@ -91,3 +103,6 @@ def load_settings(data_dir: Path | None = None) -> Settings:
         scrape_delay=_number("TG_SCRAPE_DELAY", 1.0, float),
         flood_sleep_threshold=_number("TG_FLOOD_SLEEP_THRESHOLD", 0, int),
     )
+
+
+__all__ = ["ROOT", "ConfigError", "Settings", "load_settings"]

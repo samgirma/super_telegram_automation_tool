@@ -3,10 +3,14 @@
 from __future__ import annotations
 
 import csv
+import os
+import re
+import tempfile
+from contextlib import contextmanager
 from dataclasses import asdict, dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Iterable, Iterator
+from typing import IO, Any, Iterable, Iterator
 
 MEMBER_FIELDS = [
     "user_id",
@@ -49,9 +53,87 @@ TERMINAL_RESULTS = {
     "already_processed",
 }
 
+_UNSAFE = re.compile(r"[^a-z0-9_]+")
+
 
 def _now() -> str:
     return datetime.now(timezone.utc).isoformat(timespec="seconds")
+
+
+def clean_username(text: str | None) -> str:
+    """Strip leading @ and whitespace from a username."""
+    return (text or "").strip().lstrip("@")
+
+
+def slugify(text: str) -> str:
+    """Convert arbitrary text into a safe filesystem slug."""
+    cleaned = _UNSAFE.sub("_", clean_username(text).lower()).strip("_")
+    return cleaned or "target"
+
+
+@contextmanager
+def atomic_write(
+    target_path: Path,
+    mode: str = "w",
+    encoding: str = "utf-8",
+    newline: str = "",
+    permissions: int | None = None,
+) -> Iterator[IO[Any]]:
+    """Context manager for atomic file writes using a temporary file in the same directory.
+
+    Flushes and syncs to disk before atomically replacing the destination with os.replace.
+    Cleans up the temporary file if an exception is raised.
+    """
+    path = Path(target_path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+
+    prefix = f".{path.name}.tmp."
+    temp_dir = path.parent
+
+    is_binary = "b" in mode
+    fd, temp_name = tempfile.mkstemp(prefix=prefix, dir=temp_dir)
+    temp_path = Path(temp_name)
+
+    if permissions is not None:
+        if os.name != "nt":
+            try:
+                os.chmod(temp_path, permissions)
+            except OSError:
+                pass
+    elif path.exists() and os.name != "nt":
+        try:
+            stat_res = path.stat()
+            os.chmod(temp_path, stat_res.st_mode & 0o777)
+        except OSError:
+            pass
+    elif os.name != "nt":
+        try:
+            current_umask = os.umask(0)
+            os.umask(current_umask)
+            os.chmod(temp_path, 0o666 & ~current_umask)
+        except OSError:
+            pass
+
+    file_obj: IO[Any]
+    if is_binary:
+        file_obj = open(fd, mode=mode)
+    else:
+        file_obj = open(fd, mode=mode, encoding=encoding, newline=newline)
+
+    try:
+        yield file_obj
+        file_obj.flush()
+        os.fsync(file_obj.fileno())
+        file_obj.close()
+        os.replace(temp_path, path)
+    except Exception:
+        file_obj.close()
+        if temp_path.exists():
+            try:
+                temp_path.unlink()
+            except OSError:
+                pass
+        raise
 
 
 @dataclass
@@ -71,7 +153,7 @@ class MemberRecord:
     collected_at: str = field(default_factory=_now)
 
     @classmethod
-    def from_user(cls, user, source: str, source_id: int) -> "MemberRecord":
+    def from_user(cls, user: Any, source: str, source_id: int) -> "MemberRecord":
         if getattr(user, "bot", False):
             status = "bot"
         elif getattr(user, "deleted", False):
@@ -83,10 +165,10 @@ class MemberRecord:
         else:
             status = "active"
         return cls(
-            user_id=user.id,
-            username=(user.username or "").lstrip("@"),
-            first_name=user.first_name or "",
-            last_name=user.last_name or "",
+            user_id=int(user.id),
+            username=clean_username(getattr(user, "username", None)),
+            first_name=getattr(user, "first_name", "") or "",
+            last_name=getattr(user, "last_name", "") or "",
             is_premium=bool(getattr(user, "premium", False)),
             is_verified=bool(getattr(user, "verified", False)),
             is_scam=bool(getattr(user, "scam", False)),
@@ -97,12 +179,12 @@ class MemberRecord:
             source_id=source_id,
         )
 
-    def to_row(self) -> dict:
+    def to_row(self) -> dict[str, Any]:
         row = asdict(self)
         return {key: row[key] for key in MEMBER_FIELDS}
 
 
-def _as_bool(value: str) -> bool:
+def _as_bool(value: Any) -> bool:
     return str(value).strip().lower() in {"1", "true", "yes"}
 
 
@@ -123,7 +205,7 @@ class MemberStore:
                 try:
                     record = MemberRecord(
                         user_id=int(row["user_id"]),
-                        username=(row.get("username") or "").lstrip("@"),
+                        username=clean_username(row.get("username")),
                         first_name=row.get("first_name") or "",
                         last_name=row.get("last_name") or "",
                         is_premium=_as_bool(row.get("is_premium", "")),
@@ -147,6 +229,9 @@ class MemberStore:
     def __iter__(self) -> Iterator[MemberRecord]:
         return iter(self.records.values())
 
+    def __len__(self) -> int:
+        return len(self.records)
+
     def add(self, record: MemberRecord) -> bool:
         if record.user_id in self.records:
             self.duplicates += 1
@@ -160,8 +245,7 @@ class MemberStore:
             self.add(record)
 
     def flush(self) -> Path:
-        self.path.parent.mkdir(parents=True, exist_ok=True)
-        with self.path.open("w", newline="", encoding="utf-8") as handle:
+        with atomic_write(self.path, mode="w", newline="", encoding="utf-8") as handle:
             writer = csv.DictWriter(handle, fieldnames=MEMBER_FIELDS)
             writer.writeheader()
             for record in self.records.values():
@@ -188,16 +272,21 @@ def filter_member_csv(
     kept = [record for record in store if record.username.strip()]
     dropped = len(store.records) - len(kept)
 
-    destination = source if in_place else Path(output) if output else source.with_name(
-        f"{source.stem}.filtered{source.suffix}"
+    destination = (
+        source
+        if in_place
+        else Path(output)
+        if output
+        else source.with_name(f"{source.stem}.filtered{source.suffix}")
     )
 
+    backup_path: Path | None = None
     if in_place:
-        backup = source.with_suffix(source.suffix + ".bak")
-        backup.write_bytes(source.read_bytes())
+        backup_path = source.with_suffix(source.suffix + ".bak")
+        with atomic_write(backup_path, mode="wb") as handle:
+            handle.write(source.read_bytes())
 
-    destination.parent.mkdir(parents=True, exist_ok=True)
-    with destination.open("w", newline="", encoding="utf-8") as handle:
+    with atomic_write(destination, mode="w", newline="", encoding="utf-8") as handle:
         writer = csv.DictWriter(handle, fieldnames=MEMBER_FIELDS)
         writer.writeheader()
         for record in kept:
@@ -209,8 +298,8 @@ def filter_member_csv(
         "dropped": dropped,
         "path": destination,
     }
-    if in_place:
-        result["backup"] = source.with_suffix(source.suffix + ".bak")
+    if backup_path is not None:
+        result["backup"] = backup_path
     return result
 
 
@@ -220,7 +309,8 @@ class AddLog:
     def __init__(self, path: Path) -> None:
         self.path = Path(path)
         self.results: dict[int, str] = {}
-        self.rows: list[dict] = []
+        self.rows: list[dict[str, Any]] = []
+        self._all_rows: list[dict[str, Any]] = []
 
     def load(self) -> "AddLog":
         if not self.path.exists():
@@ -228,7 +318,18 @@ class AddLog:
         with self.path.open(newline="", encoding="utf-8") as handle:
             for row in csv.DictReader(handle):
                 try:
-                    self.results[int(row["user_id"])] = row.get("result", "")
+                    user_id = int(row["user_id"])
+                    result = row.get("result", "")
+                    self.results[user_id] = result
+                    self._all_rows.append(
+                        {
+                            "timestamp": row.get("timestamp") or _now(),
+                            "user_id": user_id,
+                            "username": clean_username(row.get("username")),
+                            "result": result,
+                            "detail": row.get("detail") or "",
+                        }
+                    )
                 except (KeyError, TypeError, ValueError):
                     continue
         return self
@@ -241,27 +342,90 @@ class AddLog:
         row = {
             "timestamp": _now(),
             "user_id": user_id,
-            "username": username,
+            "username": clean_username(username),
             "result": result,
             "detail": detail,
         }
         self.rows.append(row)
+        self._all_rows.append(row)
         self.results[user_id] = result
 
     def counts(self) -> dict[str, int]:
         tally: dict[str, int] = {}
         for row in self.rows:
-            tally[row["result"]] = tally.get(row["result"], 0) + 1
+            res = str(row["result"])
+            tally[res] = tally.get(res, 0) + 1
         return tally
 
     def write(self) -> Path:
-        if not self.rows:
+        """Atomically flush all logged attempts to disk."""
+        if not self._all_rows:
             return self.path
-        self.path.parent.mkdir(parents=True, exist_ok=True)
-        exists = self.path.exists()
-        with self.path.open("a", newline="", encoding="utf-8") as handle:
+        with atomic_write(self.path, mode="w", newline="", encoding="utf-8") as handle:
             writer = csv.DictWriter(handle, fieldnames=ADD_FIELDS)
-            if not exists:
-                writer.writeheader()
-            writer.writerows(self.rows)
+            writer.writeheader()
+            writer.writerows(self._all_rows)
+        self.rows.clear()
         return self.path
+
+
+@dataclass(frozen=True)
+class DataFileInfo:
+    path: Path
+    rows: int
+    with_username: int
+    blank: int
+
+    @property
+    def name(self) -> str:
+        return self.path.name
+
+
+def scan_data_dir(data_dir: Path) -> list[DataFileInfo]:
+    """Scan data directory for member CSV files and collect row counts."""
+    if not data_dir.is_dir():
+        return []
+    found: list[DataFileInfo] = []
+    for path in sorted(data_dir.glob("*.csv")):
+        if path.name.startswith("adder_log_"):
+            continue
+        rows = with_user = 0
+        try:
+            with path.open(newline="", encoding="utf-8") as handle:
+                reader = csv.DictReader(handle)
+                if not reader.fieldnames or "username" not in reader.fieldnames:
+                    continue
+                for row in reader:
+                    rows += 1
+                    if clean_username(row.get("username")):
+                        with_user += 1
+        except (OSError, csv.Error):
+            continue
+        if rows == 0:
+            continue
+        found.append(
+            DataFileInfo(
+                path=path,
+                rows=rows,
+                with_username=with_user,
+                blank=rows - with_user,
+            )
+        )
+    return found
+
+
+__all__ = [
+    "ADD_FIELDS",
+    "MEMBER_FIELDS",
+    "OK_RESULTS",
+    "TERMINAL_RESULTS",
+    "AddLog",
+    "DataFileInfo",
+    "MemberRecord",
+    "MemberStore",
+    "atomic_write",
+    "clean_username",
+    "filter_member_csv",
+    "scan_data_dir",
+    "slugify",
+]
