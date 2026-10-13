@@ -7,13 +7,15 @@ Everything that needs Telethon is imported lazily after the dependency step.
 
 from __future__ import annotations
 
+from pathlib import Path
+
 from tg_app import ui
 
 AUTHOR = "samgirma"
 VERSION = "1.0"
 
 
-def _env_path():
+def _env_path() -> Path:
     from tg_common.config import ROOT
 
     return ROOT / ".env"
@@ -41,6 +43,9 @@ def main() -> int:
     from tg_app.app import main as run_app
 
     return run_app()
+
+
+__all__ = ["AUTHOR", "VERSION", "main"]
 
 
 if __name__ == "__main__":

@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import asyncio
 import sys
+from pathlib import Path
+from typing import Any
 
 from telethon import TelegramClient
 
@@ -31,12 +33,12 @@ MENU = [
 ]
 
 
-def _display_name(me) -> str:
+def _display_name(me: Any) -> str:
     if me is None:
         return "(unknown account)"
     if getattr(me, "username", None):
         return f"@{me.username}"
-    return str(me.id)
+    return str(getattr(me, "id", "unknown"))
 
 
 class App:
@@ -182,7 +184,7 @@ class App:
         )
         last = {"line": None}
 
-        def on_progress(seen, new, dup, skipped, expected):
+        def on_progress(seen: int, new: int, dup: int, skipped: int, expected: int | None) -> None:
             last["line"] = seen
             total = f" of ~{expected}" if expected else ""
             sys.stdout.write(
@@ -263,6 +265,13 @@ class App:
             if not ui.ask_yes_no("Looks right. Send the invites now", default=True):
                 print(ui.warn("Stopped. Nothing was sent."))
                 return
+        else:
+            if not ui.ask_yes_no(
+                f"Skip preview and send live invites to {target.title} directly",
+                default=False,
+            ):
+                print(ui.warn("Stopped. Nothing was sent."))
+                return
 
         print()
         print(
@@ -272,7 +281,7 @@ class App:
             )
         )
 
-        def on_attempt(attempted, record, result, detail):
+        def on_attempt(attempted: int, record: Any, result: str, detail: str) -> None:
             colours = {"sent": ui.GREEN, "request_sent": ui.GREEN}
             colour = colours.get(result, ui.YELLOW if result == "already_member" else ui.GREY)
             who = f"@{record.username}" if record.username else str(record.user_id)
@@ -307,6 +316,8 @@ class App:
             print(ui.ok(f"Done. {sent} invites delivered."))
         for result, count in sorted(report.counts.items()):
             print(ui.bullet(f"{count} x {ui.c(result, ui.GREY)}"))
+        if report.stopped_reason:
+            print(ui.warn(f"Notice: {report.stopped_reason}"))
         print(ui.step(f"Log: {report.path.name}"))
 
     def filter_flow(self) -> None:
@@ -321,6 +332,12 @@ class App:
         if picked is None:
             print(ui.warn("Nothing selected."))
             return
+        if not ui.ask_yes_no(
+            f"Filter '{picked.name}' in-place? A backup ({picked.name}.bak) will be created",
+            default=True,
+        ):
+            print(ui.warn("Cancelled. No files were modified."))
+            return
         result = filter_member_csv(picked.path, in_place=True)
         print()
         print(
@@ -329,7 +346,9 @@ class App:
                 f"dropped {result['dropped']} without a username."
             )
         )
-        print(ui.step(f"Backup saved as {result['backup'].name}"))
+        backup_val = result.get("backup")
+        backup_name = backup_val.name if isinstance(backup_val, Path) else str(backup_val)
+        print(ui.step(f"Backup saved as {backup_name}"))
         ui.pause()
 
     def help_flow(self) -> None:
@@ -373,3 +392,6 @@ def main() -> int:
         print()
         print(ui.warn("Interrupted."))
         return 130
+
+
+__all__ = ["App", "main", "main_async"]

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from typing import Any
 
 from telethon import TelegramClient
 from telethon.tl import types
@@ -21,7 +22,7 @@ class Choice:
     role: str | None = None
 
 
-def _kind(entity) -> str:
+def _kind(entity: Any) -> str:
     if isinstance(entity, types.Chat):
         return "group"
     if isinstance(entity, types.Channel):
@@ -31,7 +32,7 @@ def _kind(entity) -> str:
     return "chat"
 
 
-def _scrapeable(entity) -> bool:
+def _scrapeable(entity: Any) -> bool:
     """True when member lists can actually be read for this chat.
 
     Broadcast channels have no readable member list, even for their owner, so
@@ -39,14 +40,14 @@ def _scrapeable(entity) -> bool:
     """
     if isinstance(entity, types.Chat):
         return True
-    return isinstance(entity, types.Channel) and entity.megagroup
+    return isinstance(entity, types.Channel) and bool(entity.megagroup)
 
 
-def _members(entity) -> int | None:
+def _members(entity: Any) -> int | None:
     return getattr(entity, "participants_count", None)
 
 
-def _admin_role(entity) -> str | None:
+def _admin_role(entity: Any) -> str | None:
     """Return "owner", "admin" or None for how the account relates to a chat.
 
     Only supergroups accept the channel invites the adder sends, so basic
@@ -153,3 +154,6 @@ def choose(choices: list[Choice], purpose: str) -> Choice | None:
             print(ui.err(f"Choose a number between 1 and {len(choices)}."))
             continue
         return choices[index - 1]
+
+
+__all__ = ["Choice", "choose", "fetch", "render"]

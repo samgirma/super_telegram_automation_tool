@@ -9,6 +9,7 @@ from __future__ import annotations
 import os
 import shutil
 import sys
+from typing import Any
 
 RESET = "\033[0m"
 BOLD = "\033[1m"
@@ -51,7 +52,7 @@ def _enable_windows_ansi() -> None:
         pass
 
 
-def supports_color(stream=None) -> bool:
+def supports_color(stream: Any = None) -> bool:
     stream = stream or sys.stdout
     if os.environ.get("NO_COLOR"):
         return False
@@ -64,7 +65,12 @@ def supports_color(stream=None) -> bool:
     return True
 
 
-_ENABLED = None
+_ENABLED: bool | None = None
+
+
+def reset_color_cache() -> None:
+    global _ENABLED
+    _ENABLED = None
 
 
 def color_enabled() -> bool:
