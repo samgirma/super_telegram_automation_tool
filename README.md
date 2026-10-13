@@ -1,5 +1,9 @@
 # Super Telegram Automation Tool
 
+[![Python 3.10+](https://img.shields.io/badge/python-3.10%2B-blue)](https://www.python.org/)
+[![License: MIT](https://img.shields.io/badge/license-MIT-green)](LICENSE)
+[![Telethon](https://img.shields.io/badge/powered%20by-Telethon-blueviolet)](https://docs.telethon.dev/)
+
 A Telethon toolkit for Telegram member workflows: read the members of groups you
 belong to, keep them as clean CSVs, and invite a chosen set into a group you own
 or administer. Drive it from a friendly numbered **console app**, or from the
@@ -26,19 +30,25 @@ or administer. Drive it from a friendly numbered **console app**, or from the
 - **Smart pickers.** Scraping lists only groups whose members can be read;
   adding lists only supergroups you own or administer.
 
-## Quick start
+## Install
 
 ```bash
 git clone git@github.com:samgirma/super_telegram_automation_tool.git
 cd super_telegram_automation_tool
 python3 -m venv .venv
-.venv/bin/pip install -r requirements.txt
-.venv/bin/python -m tg_app
+.venv/bin/pip install -e .
+.venv/bin/sta
 ```
 
 That is the whole setup. The console app creates `.env` on first run (keep your
 `api_id`/`api_hash` handy from <https://my.telegram.org> under **API development
 tools**), logs you in once, and drops you at the menu.
+
+`pip install -e .` gives you the `sta` command. You can also run it straight
+from the source tree without installing, with `.venv/bin/python -m tg_app`.
+The CLI tools work the same way (`python -m tg_scraper`, `python -m tg_adder`,
+`python -m tg_filter`). Once published to PyPI it will also install with
+`pip install super-telegram-automation-tool`.
 
 ## What is in the box
 
