@@ -197,7 +197,23 @@ class App:
             )
             sys.stdout.flush()
 
-        report = await scrape(client, self.settings, str(picked.entity.id), on_progress=on_progress)
+        limit_input = ui.ask("Max members to scrape (number or Enter for all)", "all")
+        limit: int | None = None
+        if limit_input.strip().lower() not in {"all", "0", ""}:
+            try:
+                parsed_limit = int(limit_input)
+                if parsed_limit > 0:
+                    limit = parsed_limit
+            except ValueError:
+                print(ui.warn(f"Invalid limit {limit_input!r}, reading all available members."))
+
+        report = await scrape(
+            client,
+            self.settings,
+            str(picked.entity.id),
+            limit=limit,
+            on_progress=on_progress,
+        )
 
         print()
         print()
@@ -250,6 +266,37 @@ class App:
             return
 
         print()
+        limit_input = ui.ask(
+            "Max members to invite in this session (number or 'all', recommended: 10-25)",
+            "20",
+        )
+        limit: int | None = None
+        if limit_input.strip().lower() not in {"all", "0", ""}:
+            try:
+                parsed_limit = int(limit_input)
+                if parsed_limit > 0:
+                    limit = parsed_limit
+            except ValueError:
+                print(ui.warn(f"Invalid limit {limit_input!r}, continuing with no limit."))
+
+        delay_default = (
+            str(int(self.settings.add_delay))
+            if self.settings.add_delay.is_integer()
+            else str(self.settings.add_delay)
+        )
+        delay_input = ui.ask(
+            "Seconds delay between invites (recommended: 15-30s to prevent PEER_FLOOD)",
+            delay_default,
+        )
+        delay = self.settings.add_delay
+        try:
+            parsed_delay = float(delay_input)
+            if parsed_delay >= 0:
+                delay = parsed_delay
+        except ValueError:
+            print(ui.warn(f"Invalid delay {delay_input!r}, using default {delay}s."))
+
+        print()
         preview = ui.ask_yes_no("Preview first without sending anything", default=True)
         if preview:
             report = await add_members(
@@ -257,6 +304,8 @@ class App:
                 self.settings,
                 str(target.entity.id),
                 picked.path,
+                delay=delay,
+                limit=limit,
                 dry_run=True,
             )
             print()
@@ -276,7 +325,8 @@ class App:
         print()
         print(
             ui.info(
-                f"Inviting into {ui.c(target.title, ui.WHITE, ui.BOLD)}. "
+                f"Inviting into {ui.c(target.title, ui.WHITE, ui.BOLD)} "
+                f"with {delay}s delay" + (f" (limit: {limit})" if limit else "") + ". "
                 "This stops itself if Telegram reports a flood."
             )
         )
@@ -292,6 +342,8 @@ class App:
             self.settings,
             str(target.entity.id),
             picked.path,
+            delay=delay,
+            limit=limit,
             on_attempt=on_attempt,
         )
         print()
