@@ -7,8 +7,8 @@ import asyncio
 import sys
 from pathlib import Path
 
-from tg_common.config import ConfigError, load_settings
 from tg_common.client import connect
+from tg_common.config import ConfigError, load_settings
 from tg_scraper.scraper import scrape
 
 

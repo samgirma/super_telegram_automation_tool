@@ -5,9 +5,10 @@ from __future__ import annotations
 import asyncio
 import sys
 import time
+from collections.abc import AsyncIterator, Callable
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, AsyncIterator, Callable
+from typing import Any
 
 from telethon import TelegramClient
 from telethon.errors import (

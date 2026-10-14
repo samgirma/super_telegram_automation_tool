@@ -3,15 +3,16 @@
 from __future__ import annotations
 
 import asyncio
+from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Callable
+from typing import Any
 
 from telethon import TelegramClient
 from telethon.errors import (
+    ChannelPrivateError,
     ChannelsTooMuchError,
     ChatAdminRequiredError,
-    ChannelPrivateError,
     FloodWaitError,
     InputUserDeactivatedError,
     InviteHashExpiredError,
@@ -26,11 +27,11 @@ from telethon.errors import (
     UserIsBlockedError,
     UserIsBotError,
     UserKickedError,
+    UsernameInvalidError,
+    UsernameNotOccupiedError,
     UserNotMutualContactError,
     UserNotParticipantError,
     UserPrivacyRestrictedError,
-    UsernameInvalidError,
-    UsernameNotOccupiedError,
 )
 from telethon.tl import functions, types
 

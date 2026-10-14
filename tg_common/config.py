@@ -57,9 +57,11 @@ def _number(name: str, default: T, cast: Callable[[str], T]) -> T:
         raise ConfigError(f"{name} must be a number, got {value!r}") from exc
 
 
-def load_settings(data_dir: Path | None = None) -> Settings:
+def load_settings(data_dir: Path | None = None, env_path: Path | None = None) -> Settings:
     if load_dotenv is not None:
-        load_dotenv(ROOT / ".env")
+        target_env = env_path if env_path is not None else ROOT / ".env"
+        if target_env.exists():
+            load_dotenv(target_env)
 
     api_id_raw = _raw("TG_API_ID")
     api_hash = _raw("TG_API_HASH")

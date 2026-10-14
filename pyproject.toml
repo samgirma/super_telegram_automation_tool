@@ -65,6 +65,7 @@ packages = ["tg_app", "tg_scraper", "tg_adder", "tg_common", "tg_filter"]
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 python_files = ["test_*.py"]
+pythonpath = ["."]
 addopts = "-ra --strict-markers"
 
 [tool.ruff]
